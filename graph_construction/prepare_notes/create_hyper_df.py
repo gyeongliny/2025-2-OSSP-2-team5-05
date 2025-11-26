@@ -151,7 +151,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tokenizer",
         type=str,
-        default="clinicalbert",
+        default="gatortron",
         help="tokenizer name (word2vec / clinicalbert / gpt 등, 현재 파일에서는 직접 사용 X).",
     )
     parser.add_argument("--window_size", type=int, default=3)

@@ -61,6 +61,7 @@ def eval(model, loader, device):
             data = data.to(device)
 
             # forward
+            # x_n: [N, 4 + emb_dim] (word/note/taxonomy meta + 임베딩)
             out = model(data.x_n, data.edge_index_n, data.edge_mask, data.batch)
 
             logits = out.view(-1)            # (B,)
@@ -182,7 +183,7 @@ def train(num_epochs, model, train_loader, val_loader, test_loader, criterion, d
 
 
 if __name__ == '__main__':
-    # 1) sys.path에 graph_construction 추가
+    # 1) conf.py 에서 sys.path, 기본 인자 설정
     user_config()
     # 2) 인자 파싱
     args = parse_arguments()

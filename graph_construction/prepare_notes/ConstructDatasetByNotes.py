@@ -18,12 +18,18 @@ pd.set_option('display.max_columns', None)
 
 
 def graph_to_torch_sparse_tensor(G_true, node_attr=None):
+    """
+    networkx 그래프 → PyTorch Geometric에서 사용하는
+    edge_index / edge_attr / x / batch_t / batch_n 형태로 변환
+    """
     G = nx.convert_node_labels_to_integers(G_true)
     A_G = nx.to_numpy_array(G, weight='edge_type', dtype=float)
-    # Convert a scipy sparse matrix to a torch sparse tensor.
+
+    # scipy sparse → torch sparse style (edge_index + edge_attr)
     sparse_mx = sparse.csr_matrix(A_G).tocoo()
     edge_index = torch.from_numpy(
-        np.vstack((sparse_mx.row, sparse_mx.col))).to(torch.long)
+        np.vstack((sparse_mx.row, sparse_mx.col))
+    ).to(torch.long)
     edge_attrs = torch.from_numpy(sparse_mx.data).to(torch.float32)
 
     x = []
@@ -45,45 +51,23 @@ def graph_to_torch_sparse_tensor(G_true, node_attr=None):
     return edge_index, edge_attrs, x, batch_t, batch_n
 
 
-def generate_patient_graph(df):
-    # (현재 코드에서는 안 쓰이지만, 원 코드 호환용으로 남겨둠)
-    result_df = combine_same_word_pair(df, col_name='global_freq')
-    result_df['edge_attr'] = 1
-    result_graph = nx.from_pandas_edgelist(result_df, 'word1', 'word2', 'edge_attr')
-
-    # remove nan nodes
-    remove_list = []
-    for node in result_graph:
-        if node != node:
-            remove_list.append(node)
-        elif str(node) == 'nan':
-            remove_list.append(node)
-        else:
-            continue
-
-    if len(remove_list) > 0:
-        for rm_node in remove_list:
-            result_graph.remove_node(rm_node)
-
-    return result_graph
-
-
 # === 경로 설정: 프로젝트 루트 기준으로 DATA_RAW/root ===
 # 이 파일 위치: project_root/graph_construction/prepare_notes/ConstructDatasetByNotes.py
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_RAW_ROOT = osp.join(BASE_DIR, "data", "DATA_RAW", "root")
 
 
-def load_token_embeddings(tokenizer='gatortron'):
+def load_token_embeddings(tokenizer: str = 'gatortron'):
     """
-    Load pretrained token embeddings.
+    사전 계산된 토큰 임베딩 로딩 함수.
 
     tokenizer 옵션:
-      - 'clinicalbert' → clinicalbert_*.npy  (예: clinicalbert_768.npy)
-      - 'gatortron'    → gatortron_*.npy     (예: gatortron_768.npy)
+      - 'clinicalbert' → clinicalbert_*.npy (예: clinicalbert_768.npy)
+      - 'gatortron'    → gatortron_*.npy    (예: gatortron_1024.npy)
       - 'word2vec'     → word2vec_100 (gensim Word2Vec 포맷)
 
-    각 .npy 파일은 {word: np.ndarray[emb_dim]} 형태의 dict 여야 함.
+    clinicalbert/gatortron용 .npy 파일 형식:
+      { token(str): np.ndarray[emb_dim] } 형태의 dict
     """
     emb_root = DATA_RAW_ROOT
 
@@ -138,17 +122,32 @@ def load_token_embeddings(tokenizer='gatortron'):
 
 
 class ConstructDatasetByNotes():
+    """
+    note-level 하이퍼그래프를 구성하고,
+    각 노드에 (token-level) 임베딩을 붙여서 PyG Data 리스트를 생성하는 클래스.
+    """
     def __init__(self, pre_path, split, dictionary, task, tokenizer='gatortron'):
+        """
+        Args:
+            pre_path : data/DATA_PRE
+            split    : 'train' or 'test'
+            dictionary : vocab.txt에서 읽은 토큰 리스트
+            task     : 'in-hospital-mortality'
+            tokenizer : 'word2vec' or 'clinicalbert' or 'gatortron'
+        """
         self.pre_path = pre_path
         self.split = split
         self.dictionary = dictionary
         self.task = task
-        self.tokenizer = tokenizer  # 'word2vec' or 'clinicalbert' or 'gatortron'
+        self.tokenizer = tokenizer
         super(ConstructDatasetByNotes, self).__init__()
         self.labels = self.get_labels(split)
         self.cat_path = osp.join(self.pre_path, 'categories.txt')
 
     def get_labels(self, split):
+        """
+        listfile.csv에서 patient_episode별 y_true (레이블) 로딩.
+        """
         label_patients = pd.read_csv(
             osp.join(self.pre_path, self.task, split + '_hyper', 'listfile.csv'),
             sep=',',
@@ -162,14 +161,17 @@ class ConstructDatasetByNotes():
         return label_patients
 
     def make_embedding(self, G, node, node_type, emb_dim):
-        emb = np.zeros(4 + emb_dim, dtype=np.float32)
         """
-        0: node_type -> {0:word, 1:note; 2:taxonomy}
-        1: word_id
+        node_emb vector 템플릿 생성.
+
+        0: node_type -> {0:word, 1:note, 2:taxonomy}
+        1: word_id   (vocab index) - word 노드일 때만 의미 있음
         2: note_id
-        3: taxonomy_id
-        4:~: for embedding. (word embedding initialized by word2vec/LLM)
+        3: taxonomy_id (cat_id)
+        4:~: token-level 임베딩 (word2vec / ClinicalBERT / GatorTronS 등)
         """
+        emb = np.zeros(4 + emb_dim, dtype=np.float32)
+
         if node_type == 'word':
             emb[0] = 0
             emb[1] = -1
@@ -188,6 +190,9 @@ class ConstructDatasetByNotes():
         return emb
 
     def create_all_cats(self, path):
+        """
+        모든 train/test hyper 파일에서 CATEGORY 모아서 categories.txt 만든는 유틸 (원 코드 유지용).
+        """
         all_cats = []
         for split in ['train', 'test']:
             hyper_path = osp.join(self.pre_path, self.task, split + '_hyper')
@@ -205,58 +210,61 @@ class ConstructDatasetByNotes():
 
     def set_node_embedding(self, G, node_attr='node_emb', get_vec=None, emb_dim=768):
         """
-        노드 임베딩 설정 함수 (clinicalBERT/gatortron/word2vec 공용)
-        Args:
-            G : networkx graph
-            node_attr : 임베딩 속성명 ('node_emb')
-            get_vec : 단어를 입력받아 임베딩 벡터(np.ndarray[emb_dim]) 반환하는 함수
-            emb_dim : 임베딩 차원
+        노드에 node_emb 속성 채우기 (clinicalBERT/gatortron/word2vec 공용).
         """
         for node in G:
-            node = str(node)
+            node_name = str(node)
 
             if node_attr == 'node_emb':
                 # 노트 노드 (n_으로 시작)
-                if 'n_' in node:
-                    emb = self.make_embedding(G, node, node_type='note', emb_dim=emb_dim)
-                # 단어 노드
-                elif not node.startswith('t_'):
-                    emb = self.make_embedding(G, node, node_type='word', emb_dim=emb_dim)
+                if 'n_' in node_name:
+                    emb = self.make_embedding(G, node_name, node_type='note', emb_dim=emb_dim)
+
+                # 단어 노드 (taxonomy prefix 't_' 가 아닌 경우)
+                elif not node_name.startswith('t_'):
+                    emb = self.make_embedding(G, node_name, node_type='word', emb_dim=emb_dim)
 
                     # dictionary에서 단어 인덱스 찾기 (없으면 -1)
                     try:
-                        emb[1] = self.dictionary.index(node)
+                        emb[1] = self.dictionary.index(node_name)
                     except ValueError:
                         emb[1] = -1
 
-                    # 단어 벡터 설정
+                    # 단어 벡터 설정 (GatorTronS / ClinicalBERT / word2vec)
                     if get_vec is not None:
-                        emb[4:] = get_vec(node)
+                        emb[4:] = get_vec(node_name)
                     else:
                         emb[4:] = np.zeros(emb_dim, dtype=np.float32)
+
                 # taxonomy 노드
                 else:
-                    emb = self.make_embedding(G, node, node_type='tax', emb_dim=emb_dim)
+                    emb = self.make_embedding(G, node_name, node_type='tax', emb_dim=emb_dim)
 
             elif node_attr == 'pe':
-                # positional encoding 등 다른 노드 속성을 사용하는 경우 (원 코드 유지)
-                emb = node_attr[node_attr[:, 0] == node, 1:][0]
+                # positional encoding 등 (원 코드 호환용, 실제로는 사용 X)
+                emb = node_attr[node_attr[:, 0] == node_name, 1:][0]
                 assert (emb.astype(np.float32) == 1).sum() > 0
 
             else:
                 raise ValueError('unknown node attribute')
 
-            G.nodes[node][node_attr] = emb
+            G.nodes[node_name][node_attr] = emb
 
         return G
 
     ### HyperGraph ###
     def construct_hypergraph_datalist(self):
+        """
+        train_hyper / test_hyper 아래 episode별 hyper 파일을 읽어서
+        patient-level 하이퍼그래프 목록을 생성.
+        """
         print()
         print("<<Start Construct Hypergraph Datalist>>")
+
+        # 토큰 임베딩 로딩 (GatorTronS / ClinicalBERT / word2vec)
         get_vec, emb_dim = load_token_embeddings(self.tokenizer)
 
-        # hypergraph source dir (episode별 .csv 들어있는 곳)
+        # hypergraph source dir (episode별 .csv)
         hyper_path = osp.join(self.pre_path, self.task, self.split + '_hyper')
 
         # 1) listfile.csv 기준 episode 이름들 (확장자 없음)
@@ -318,7 +326,6 @@ class ConstructDatasetByNotes():
 
             # 노트 단위로 그래프 구성
             for n_id, n_df in p_df.groupby(by='note_NM'):
-
                 n_df = n_df.dropna(axis=0)
                 n_df = n_df[n_df['WORD'] != 'nan']
 
@@ -353,7 +360,7 @@ class ConstructDatasetByNotes():
                     }
                 nx.set_node_attributes(G_n, attrs)
 
-                # 임베딩 붙이기 (clinicalbert/gatortron/word2vec 공용)
+                # 임베딩 붙이기 (word2vec / ClinicalBERT / GatorTronS 공용)
                 G_n = self.set_node_embedding(
                     G_n,
                     node_attr='node_emb',
@@ -417,10 +424,9 @@ class ConstructDatasetByNotes():
 
 
 if __name__ == '__main__':
-    # 로컬에서 단독 실행 테스트용 (예: 데이터셋 한 번 생성해보기)
+    # 로컬 테스트용 (서버에서 바로 실행해도 됨)
     task = 'in-hospital-mortality'
 
-    # 프로젝트 루트 기준 경로
     BASE = BASE_DIR
     RAW_PATH = osp.join(BASE, 'data', 'DATA_RAW')
     PRE_PATH = osp.join(BASE, 'data', 'DATA_PRE')
@@ -433,7 +439,7 @@ if __name__ == '__main__':
         split='test',              # 또는 'train'
         dictionary=dictionary,
         task=task,
-        tokenizer='gatortron'      # 🔴 여기서 GatorTron encoder 사용
+        tokenizer='gatortron'      # 🔴 GatorTronS 토큰 임베딩 사용
     )
     data_list = cdbn.construct_hypergraph_datalist()
     print(f"[INFO] Constructed {len(data_list)} graphs.")

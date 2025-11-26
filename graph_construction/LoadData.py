@@ -27,7 +27,7 @@ class LoadPaitentData():
     - data_type  : 'hyper' 등 (hypergraph 기준)
     - tokenizer  : 'clinicalbert', 'gatortron', 'word2vec' 등
     """
-    def __init__(self, name, type, data_type, tokenizer=''):
+    def __init__(self, name, type, data_type, tokenizer='gatortron'):
         self.name = name
         self.type = type
         self.data_type = data_type
@@ -157,7 +157,8 @@ if __name__ == '__main__':
     parser.add_argument('--name', type=str, default='in-hospital-mortality')
     parser.add_argument('--type', type=str, default='cutoff')
     parser.add_argument('--data_type', type=str, default='hyper')
-    parser.add_argument('--tokenizer', type=str, default='clinicalbert')
+    # 🔥 기본 tokenizer를 GatorTronS 기반으로 사용
+    parser.add_argument('--tokenizer', type=str, default='gatortron')
 
     args, _ = parser.parse_known_args()
     loader = LoadPaitentData(
