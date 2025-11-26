@@ -30,7 +30,7 @@ class PygNotesGraphDataset(InMemoryDataset):
     def __init__(self, name, split, tokenizer, dictionary, pre_path, data_type='hyper',
                  transform=None, pre_transform=None):
 
-        # IMDB_HCUT/in-hospital-mortality/clinicalbert/
+        # IMDB_HCUT/in-hospital-mortality/<tokenizer>/
         self.imdb_path = osp.join(IMDB_PATH, name, tokenizer)
 
         self.name = name
@@ -45,8 +45,11 @@ class PygNotesGraphDataset(InMemoryDataset):
                          transform, pre_transform)
 
         # 이미 생성된 *.pt 파일 로드
+        # 🔥 PyTorch 2.6 이상에서는 weights_only 기본값이 True라서
+        #    여기서 반드시 weights_only=False 를 지정해줘야 함.
         self.data, self.slices = torch.load(
-            osp.join(self.processed_dir, self.processed_file_names)
+            osp.join(self.processed_dir, self.processed_file_names),
+            weights_only=False
         )
 
     @property
@@ -55,12 +58,12 @@ class PygNotesGraphDataset(InMemoryDataset):
 
     @property
     def processed_dir(self):
-        # IMDB_HCUT/in-hospital-mortality/clinicalbert
+        # IMDB_HCUT/in-hospital-mortality/<tokenizer>
         return osp.join(self.imdb_path)
 
     @property
     def processed_file_names(self):
-        # 예: train_hyper/train_hyper_clinicalbert.pt
+        # 예: train_hyper/train_hyper_gatortron.pt
         if self.data_type == "hyper":
             return f"{self.split}_{self.data_type}/{self.split}_{self.data_type}_{self.tokenizer}.pt"
         else:
@@ -123,8 +126,10 @@ class Load_PygNotesGraphDataset(InMemoryDataset):
 
         super().__init__(self.imdb_path, transform, pre_transform)
 
+        # 🔥 여기서도 마찬가지로 weights_only=False 필수
         self.data, self.slices = torch.load(
-            osp.join(self.processed_dir, self.processed_file_names)
+            osp.join(self.processed_dir, self.processed_file_names),
+            weights_only=False
         )
 
     @property
